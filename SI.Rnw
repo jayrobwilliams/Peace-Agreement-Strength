@@ -1,0 +1,1261 @@
+% % document type % %
+\documentclass[12pt]{article}
+
+% % preamble % %
+\usepackage{harvard} % bibliography
+\usepackage{amsmath} % centers and provides equation numbers for align env
+\usepackage{amssymb} % allows use of normal N symbol
+\usepackage{bm} % bold greek letters
+\usepackage{graphicx} % allows graphics floats
+\usepackage{grffile} % allows more image file names
+\usepackage{subcaption} % allows subfigures in floats
+\newcommand{\subfloat}[2][need a sub-caption]{\subcaptionbox{#1}{#2}} % % knitr subfigures
+\usepackage[margin=1in]{geometry}
+\usepackage[hidelinks]{hyperref} % allows URLs and in-document hyperlinking
+\usepackage{setspace} % allows line spacing
+\usepackage{rotating} % allow sideways table environment
+\usepackage{moreverb} % allows use of verbatimtab
+\renewcommand\verbatimtabsize{4\relax} % sets verbatimtab indent to half of default, looks better
+%\usepackage{parskip} % don't indent new paragraphs
+\usepackage{dcolumn} % align table zeros
+\newtheorem{hyp}{Hypothesis} % hypothesis formatting
+\usepackage{tocloft}
+\renewcommand{\cftsecleader}{\cftdotfill{\cftdotsep}} % dots for sections
+
+% % section numbered figures and tables
+\usepackage{chngcntr}
+\counterwithin{figure}{section}
+\counterwithin{table}{section}
+
+% dark blue for email addresses
+\definecolor{darkblue}{rgb}{0.0,0.0,0.3}
+\hypersetup{colorlinks,breaklinks,
+            linkcolor=darkblue,urlcolor=darkblue,
+            anchorcolor=darkblue,citecolor=darkblue}
+
+% For \email{ADDRESS}, links ADDRESS to the url mailto:ADDRESS
+\providecommand*\email[1]{\href{mailto:#1}{#1}}
+% Same as above, but pretty-prints ADDRESS in teletype fixed-width font
+\renewcommand*\email[1]{\href{mailto:#1}{\texttt{#1}}}
+
+\title{Supplemental Information for \\
+A Latent Variable Approach to Measuring and Explaining Peace Agreement Strength}
+\author{Rob Williams
+\and Daniel J.\ Gustafsone
+\and Stephen E.\ Gent
+\and Mark J.C.\ Crescenzi}
+\date{\today}
+
+% % knitr setup % %
+<<setup, echo = F, message = F, warning = F>>=
+knitr::opts_chunk$set(echo = F, cache = T) # code chunks omitted by default
+options(digits = 2) # round all R output to two digits
+
+## clear environment
+rm(list = ls())
+
+## load packages
+library(xtable) # crosstab TeX tables
+library(rstan) # interface to stan
+library(reshape2) # collapse data for plotting
+library(tidyverse) # plots and data manipulation
+library(ggridges) # ridge plots for parameters
+library(bayesplot) # stan plots
+library(ggrepel) # repelled text for id restriction scatterplots
+library(corrplot) # pretty correlation plots
+
+## set seed for replication
+set.seed(7912305)
+
+## import data and models
+invisible(lapply(list.files('Knitr Input', '.RData', full.names = T), load, .GlobalEnv))
+
+## import functions
+source('mcmcreg.R')
+source('theme_rw.R')
+
+## document level variables
+ci_level <- .95
+@
+
+% % create averaged dataset for plots % %
+<<averaged_estimates, warning = F>>=
+## add up each element in list of data frames, then divide by length of list
+PA_avg <- Reduce("+", lapply(PA_list, function(x) x %>% mutate_all(function(y) as.numeric(as.character(y))))) / length(PA_list)
+
+PA_avg <- PA_avg %>% mutate_at(vars(sanction, mediation, pa_type), as.factor)
+
+## get names from list of data frames since they don't vary
+PA_avg[, c('Name', 'pa_name')] <- PA_list[[1]][, c('Name', 'pa_name')]
+
+## drop imputation and id variables from mice since no longer needed
+PA_avg[, c('.imp', '.id')] <- NULL
+
+## shorten dayton agreement name
+PA_names$pa_name <- as.character(PA_names$pa_name)
+PA_names$pa_name[grep('Dayton', PA_names$pa_name)] <- 'Dayton Accords'
+PA_names$pa_name <- as.factor(PA_names$pa_name)
+@
+
+% % used to access data and results throughout paper % %
+<<results_names>>=
+## hierarchical predictors/explanatory variables
+covariates_nc <- cbind(model.matrix(~ sanction + mediation + intervention_imi,
+                                    data = PA_avg),
+                       scale(PA_avg[, c('aidpct')]))[, -1]
+colnames(covariates_nc) <- c('Sanction', 'Multilateral Sanction', 'Mediation',
+                             'Regional Mediation',
+                             'Intervention', 'Aid ($\\%$ GNI)')
+covariates <- cbind(model.matrix(~ sanction + mediation + intervention_imi
+                                 + as.factor(Inc) + CumInt + cold_war,
+                                 data = PA_avg),
+                      scale(PA_avg[, c('aidpct', 'rpr_work',
+                                             'polity2')]))[, -1]
+colnames(covariates) <- c('Sanction', 'Multilateral Sanction', 'Mediation',
+                          'Regional Mediation', 'Intervention', 'Government',
+                          'Cumulative Intensity', 'Post Cold War',
+                          'Aid ($\\%$ GNI)', 'RPR', 'Polity2')
+covariates_comp <- cbind(model.matrix(~ sanction + mediation + intervention_imi
+                                      + as.factor(pa_type) + as.factor(Inc)
+                                      + CumInt + cold_war,
+                                      data = PA_avg),
+                         scale(PA_avg[, c('aidpct', 'rpr_work',
+                                                'polity2')]))[, -1]
+colnames(covariates_comp) <- c('Sanction', 'Multilateral Sanction', 'Mediation',
+                               'Regional Mediation', 'Intervention', 'Partial',
+                               'Process', 'Government', 'Cumulative Intensity',
+                               'Post Cold War', 'Aid ($\\%$ GNI)', 'RPR', 'Polity2')
+
+## indicators
+indicators.mat <- as.matrix(PA[, provisions])
+indicators.mat.full <- as.matrix(PA[, provisions_all])
+indicators.mat.npk <- as.matrix(PA[, provisions_npk])
+
+# proper names for provisions
+ind_names <- c('Ceasefire', 'Military Integration', 'Disarmament',
+               'Withdrawal', 'Political Parties', 'Government Integration',
+               'Civil service Integration', 'Elections', 'Interim Government',
+               'National Talks', 'Power Sharing', 'Amnesty for Rebels',
+               'Prisoner Release', 'National Reconciliation',
+               'Right of Return', 'Reaffirmation', 'Peacekeeping',
+		           'Implementation')
+ind_names_full <- c('Ceasefire', 'Military Integration', 'Disarmament',
+                    'Withdrawal', 'Political Parties', 'Government Integration',
+                    'Civil service Integration', 'Elections', 'Interim Government',
+                    'National Talks', 'Power Sharing', 'Territorial Autonomy',
+                    'Federalism', 'Independence', 'Referendum', 'Local power Sharing',
+                    'Regional Development', 'Cultural Freedoms', 'Local Governance',
+                    'Amnesty for Rebels', 'Prisoner Release', 'National Reconciliation',
+                    'Right of Return', 'Reaffirmation', 'Outlining', 'Peacekeeping',
+                    'Implementation')
+ind_names_npk <- c('Ceasefire', 'Military Integration', 'Disarmament',
+                   'Withdrawal', 'Political Parties', 'Government Integration',
+                   'Civil service Integration', 'Elections', 'Interim Government',
+                   'National Talks', 'Power Sharing', 'Amnesty for Rebels',
+                   'Prisoner Release', 'National Reconciliation',
+                   'Right of Return', 'Reaffirmation', 'Implementation')
+colnames(indicators.mat) <- ind_names
+colnames(indicators.mat.full) <- ind_names_full
+colnames(indicators.mat.npk) <- ind_names_npk
+
+## replace names in stanfits
+names(agmt_add_ind)[c(grep('beta', names(agmt_add_ind)),
+                      grep('mu_delta', names(agmt_add_ind)))] <-
+  c(colnames(covariates), '$ \\mu_\\delta $')
+
+names(agmt_full_prob_npk)[c(grep('beta', names(agmt_full_prob_npk)),
+                      grep('mu_delta', names(agmt_full_prob_npk)))] <-
+  c(colnames(covariates), '$ \\mu_\\delta $')
+
+names(agmt_full_prob_sanc)[c(grep('beta', names(agmt_full_prob_sanc)),
+                             grep('mu_delta', names(agmt_full_prob_sanc)))] <-
+  c('Sanction', 'Multilateral Sanction', '$ \\mu_\\delta $')
+
+names(agmt_full_prob_med)[c(grep('beta', names(agmt_full_prob_med)),
+                            grep('mu_delta', names(agmt_full_prob_med)))] <-
+  c('Mediation', 'Regional Mediation', '$ \\mu_\\delta $')
+
+names(agmt_full_prob_mil)[c(grep('beta', names(agmt_full_prob_mil)),
+                            grep('mu_delta', names(agmt_full_prob_mil)))] <-
+  c('Intervention', '$ \\mu_\\delta $')
+
+names(agmt_full_prob_aid)[c(grep('beta', names(agmt_full_prob_aid)),
+                            grep('mu_delta', names(agmt_full_prob_aid)))] <-
+  c('Aid', '$ \\mu_\\delta $')
+
+names(agmt_full_prob_nc)[c(grep('beta', names(agmt_full_prob_nc)),
+                           grep('mu_delta', names(agmt_full_prob_nc)))] <-
+  c(colnames(covariates_nc), '$ \\mu_\\delta $')
+
+names(agmt_full_prob_nc_acd)[c(grep('beta', names(agmt_full_prob_nc_acd)),
+                           grep('mu_delta', names(agmt_full_prob_nc_acd)))] <-
+  c(colnames(covariates_nc), '$ \\mu_\\delta $')
+
+names(agmt_full_prob)[c(grep('beta', names(agmt_full_prob)),
+                        grep('mu_delta', names(agmt_full_prob)))] <-
+  c(colnames(covariates), '$ \\mu_\\delta $')
+
+names(agmt_full_prob_acd)[c(grep('beta', names(agmt_full_prob_acd)),
+                        grep('mu_delta', names(agmt_full_prob_acd)))] <-
+  c(colnames(covariates), '$ \\mu_\\delta $')
+
+names(agmt_full_prob_comp)[c(grep('beta', names(agmt_full_prob_comp)),
+                        grep('mu_delta', names(agmt_full_prob_comp)))] <-
+  c(colnames(covariates_comp), '$ \\mu_\\delta $')
+
+names(agmt_full_prob_id_1)[c(grep('beta', names(agmt_full_prob_id_1)),
+                             grep('mu_delta', names(agmt_full_prob_id_1)))] <-
+  c(colnames(covariates), '$ \\mu_\\delta $')
+
+names(agmt_full_prob_id_2)[c(grep('beta', names(agmt_full_prob_id_2)),
+                             grep('mu_delta', names(agmt_full_prob_id_2)))] <-
+  c(colnames(covariates), '$ \\mu_\\delta $')
+
+names(agmt_full_prob_id_3)[c(grep('beta', names(agmt_full_prob_id_3)),
+                             grep('mu_delta', names(agmt_full_prob_id_3)))] <-
+  c(colnames(covariates), '$ \\mu_\\delta $')
+
+names(agmt_response_nc)[c(grep('beta', names(agmt_response_nc)),
+                          grep('mu_delta', names(agmt_response_nc)))] <-
+  c(colnames(covariates_nc), '$ \\mu_\\delta $')
+
+names(agmt_response)[c(grep('beta', names(agmt_response)),
+                       grep('mu_delta', names(agmt_response)))] <-
+  c(colnames(covariates), '$ \\mu_\\delta $')
+
+names(agmt_irt)[grep('gamma', names(agmt_irt))] <- colnames(indicators.mat)
+
+names(agmt_full_prob)[grep('gamma', names(agmt_full_prob))] <-
+  colnames(indicators.mat)
+
+names(agmt_full_prob_all_inds)[grep('gamma', names(agmt_full_prob_all_inds))] <-
+  colnames(indicators.mat.full)
+@
+
+% % body % %
+
+\begin{document}
+
+\maketitle
+
+\tableofcontents
+
+\clearpage
+
+\doublespacing
+
+% % alphabetic section numbering
+\renewcommand{\thesection}{\Alph{section}}
+
+\section{Provision Selection} \label{appendix:prov_sel}
+
+Table \ref{table:full_inds_lit} lists all provisions in the data and citations for their positive effect on agreement duration. This list represents the pool of candidate indicators for inclusion in our measurement model, but not all provisions are employed. We discuss this process at length in the section on agreement strength measurement.
+
+\begin{table}
+	\footnotesize
+	\begin{tabular}{ll}
+		\hline
+		Provision & Citation \\
+		\hline
+		Ceasefire & \\
+		Integration of Rebels into Military & \\
+		Disarmament & \\
+		Withdrawal of Foreign Forces & \\
+		Political Parties for Former Rebels & \cite{Hartzell1999}\\
+		Integration of Rebels into Government & \cite{Hartzell1999}\\
+		Integration of Rebels into Civil service & \cite{Hartzell1999}\\
+		Elections & \\
+		Integration of Rebels into Interim Government & \\
+		National Talks & \\
+		Power Sharing in Government & \cite{Hartzell2003} \\
+		Territorial Autonomy & \cite{Hartzell1999,Hartzell2001}\\
+		Federalism & \\
+		Independence & \\
+		Referendum & \\
+		Local power Sharing & \\
+		Regional Development & \cite{Hartzell1999} \\
+		Cultural Freedoms & \\
+		Local Governance & \\
+		Amnesty for Rebels & \\
+		Prisoner Release & \\
+		National Reconciliation Efforts & \\
+		Right of Return for Refugees & \\
+		Reaffirm Earlier Agreement & \\
+		Outlining Peace Process & \\
+		Implementation of Peacekeeping & \cite{Hartzell2001,Fortna2003} \\
+		Commission to Oversee Implementation & \cite{Fortna2003} \\
+		\hline
+	\end{tabular}
+	\caption{Peace agreement provisions in the UCDP peace agreements data, with citations for provisions that are associated with increased agreement duration. We omit border demarcation provisions from our analysis because no agreements in our sample of conflicts feature these provisions.}
+	\label{table:full_inds_lit}
+\end{table}
+
+To assess which indicators are suitable for inclusion in our measurement model, we plot the densities of the indicator discrimination parameters. If all indicators have a positive effect on the latent quantity, then the densities of all parameters should be well to the right of zero. As the parameters are constrained to be positive, no densities will be to the left of zero, but an indicator that does not have a positive relationship with the latent quantity will have a density that bumps right against zero. Any indicator that is concentrated against zero may be representative of a different latent quantity than that represented by indicators with $ \bm{\gamma} $ values greater than 0.
+
+<<gamma_all_pars, fig.cap = 'Discrimination parameters for all agreement provisions. Parameters with the majority of their density near zero represent a different latent dimension. We remove these parameters from our analysis', fig.height = 8, message = F, warning = F>>=
+
+## plot densities to see if positive discrimination parameter constraints make sense
+gamma_all_ggs <- ggmcmc::ggs(As.mcmc.list(agmt_full_prob_all_inds), family = 'gamma')
+
+## reverse order of discrimination parameters to match tables
+gamma_all_ggs$Parameter <- factor(gamma_all_ggs$Parameter,
+                                   levels = rev(levels(gamma_all_ggs$Parameter)))
+
+## plot ridgeplots for all discrimination parameters
+ggplot(gamma_all_ggs, aes(x = value, y = (Parameter), color = as.factor(Chain))) +
+  geom_vline(xintercept = 0, linetype = 5, col = 'gray40') +
+  geom_density_ridges(fill = NA, rel_min_height = .1, scale = 2,
+                      show.legend = F, from = 0) +
+  labs(x = '', y = '') +
+  scale_color_grey() +
+  scale_y_discrete(labels = rev(colnames(indicators.mat.full))) +
+  theme_bw() + 
+  coord_cartesian(xlim = c(0, .75)) +
+  theme(plot.background = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.border = element_blank(),
+        axis.ticks.x = element_line(color = 'gray40'),
+        axis.ticks.y = element_blank())
+@
+
+We see that the majority of the density for territorial autonomy, federalism, independence, referendum, local power sharing, regional development, cultural freedoms, and outlining the peace process is concentrated right at zero. As there are several indicators here, this suggests that they may be indicators of some underlying dimension other than agreement strength. With the exception of peace process outlining, all of these provisions are related to local autonomy in some way or another. This suggests that there is a second latent dimension connected to territoriality and self-determination. While this suggests opportunities for future research, we focus on the agreement strength dimension.
+
+We subsequently remove such `territorial' provisions with $ \bm{\gamma} \approx 0 $ from our analysis and do not present results from this specification as the measurement of the latent concept would be biased. Given that the indicators included in the final model are strongly associated with increased agreement duration in the literature, we can be more confident that this latent dimension reflects the underlying strength of peace agreements.
+% maybe cut previous sentence due to weakening of link b/w duration + strength
+
+\section{Descriptive Statistics} \label{appendix:descriptives}
+
+Table \ref{tab:ind_prop} presents the proportions of the observed indicators used in our analysis, while Table \ref{tab:ind_types} breaks them down by peace agreement comprehensiveness. There is significant variation across agreement comprehensiveness, and some indicators such as power sharing or civil service integration are never present in process agreements. The proportion of many indicators coded as 1 decreases as we move from full, to partial, to process peace agreements. These differences support our argument that there are qualitative differences between peace agreements with different levels of comprehensivenss, and that a model which tries to measure the strength of all of them pooled together may reach biased conclusions.
+
+<<ind_prop, results = 'asis'>>=
+
+## calculate indicator provisions for inline; print in appendix
+ind_prop_tab <- prop.table(t(apply(indicators.mat, 2, table)), 1)
+
+##
+print(xtable(ind_prop_tab, caption = 'Agreement Indicator Proportions',
+             label = 'tab:ind_prop', align = rep('l', 3)), table.placement = '!h')
+@
+
+<<ind_prop_type>>=
+print(xtable(prop.table(t(apply(indicators.mat[which(covariates_comp[, 'Partial'] == 0
+                                                     & covariates_comp[, 'Process'] == 0), ], 2,
+                                table)), 1),
+             align = rep('l', 3)), file = 'figure/pa_type1_tab.tex', floating = F)
+
+print(xtable(prop.table(t(apply(indicators.mat[which(covariates_comp[, 'Partial'] == 1), ],
+                                2, table)), 1), align = rep('l', 3)),
+      file = 'figure/pa_type2_tab.tex', floating = F, include.rownames = F)
+
+## coerce proportion table for pa_type3 to dataframe from list, then replace NAs with 0s
+ind_type3_prop <- as.matrix(plyr::ldply(t(apply(indicators.mat[which(covariates_comp[, 'Process'] == 1),
+                                                         ], 2, table)), rbind))
+
+## replace rownames with indicator names
+rownames(ind_type3_prop) <- colnames(indicators.mat)
+
+## replace NAs with 0s for prop.table
+ind_type3_prop[is.na(ind_type3_prop)] <- 0
+
+## convert from frequency to proportion table
+ind_type3_prop <- prop.table(ind_type3_prop, 1)
+
+## output proportion table
+print(xtable(ind_type3_prop, align = rep('l', 3)),
+      file = 'figure/pa_type3_tab.tex', floating = F,
+      include.rownames = F)
+@
+
+\begin{table}[!ht]
+\centering
+\subfloat[Full]{\label{tab:ind_type1}{\input{figure/pa_type1_tab.tex}}}\quad
+\subfloat[Partial]{\label{tab:ind_type2}{\input{figure/pa_type2_tab.tex}}}\quad
+\subfloat[Process]{\label{tab:ind_type3}{\input{figure/pa_type3_tab.tex}}}
+\caption{Observed Indicator Proportions by Agreement Type}
+\label{tab:ind_types}
+\end{table}
+
+Table \ref{tab:pred_sum} presents summary statistics for the uncscaled continuous predictors in the full probability model, while Table \ref{tab:pred_prop} presents the proportions for the discrete predictors. We omit the provision ``border demarcation'' because it refers to international borders, and hence does not appear in our sample of intrastate conflicts. Figure \ref{fig:desc_plots} displays the distributions of these predictors in graphical form. Figure \ref{fig:pred_corr} presents a correlation plot for the (scaled) explanatory predictors of agreement strength. Values for the continuous predictors represent the average of \Sexpr{PA_mi$m} imputations of any variables with missing data. The median conflict has \Sexpr{median(table(PA_avg$CID))} agreements, and ignoring this structure in our data would bias our estimates, which is why we include a random intercept $\bm{\delta}$ by conflict.
+
+<<pred_sum, results = 'asis'>>=
+covariates_unscale <- cbind(model.matrix(~ sanction + mediation + intervention_imi
+                                         + intervention_acd + as.factor(pa_type)
+                                         + as.factor(Inc) + CumInt + cold_war,
+                                      data = PA_avg),
+                         PA_avg[, c('aidpct', 'rpr_work', 'polity2')])[, -1]
+colnames(covariates_unscale) <- c('Sanction', 'Multilateral Sanction', 'Mediation',
+                               'Regional Mediation', 'Intervention$_{IMI}$',
+                               'Intervention$_{ACD}$', 'Partial',
+                               'Process', 'Government', 'Cumulative Intensity',
+                               'Post Cold War', 'Aid ($\\%$ GNI)', 'RPR', 'Polity2')
+print(xtable(t(sapply(as.data.frame(covariates_unscale[, 12:ncol(covariates_unscale)]),
+                     plyr::each(min, max, mean, median, sd))),
+             caption = 'Summary statistics for continuous predictors. Values reflect the average of five imputed datasets due to missingness on all continuous predictors. Predictors are centered and scaled in models, but shown untransformed.', label = 'tab:pred_sum',
+             align = c('l', rep('r', 5))),
+      table.placement = '!h', sanitize.text.function = identity)
+@
+
+<<pred_prop, results = 'asis'>>=
+## use plyr to create dataframe from irregular list of table() results
+pred_prop <- as.matrix(plyr::ldply(t(apply(PA_avg %>%
+                                       select(sanction, mediation,
+                                              intervention_imi,
+                                              intervention_acd, pa_type,
+                                              Inc, CumInt, cold_war) %>%
+                                       mutate(pa_type = as.numeric(as.character(pa_type)) - 1,
+                                              Inc = as.numeric(Inc) - 1),
+                                     2, table)), rbind))
+
+## replace rownames with predictor names
+rownames(pred_prop) <- c('Sanction', 'Mediation', 'Intervention (IMI)',
+                         'Intervention (ACD)',
+                         'Comprehensiveness', 'Government', 'Cumulative Intensity',
+                         'Post Cold War')
+
+## replace NAs with 0s for prop.table
+pred_prop[is.na(pred_prop)] <- 0
+
+## convert from frequency to proportion table
+pred_prop <- prop.table(pred_prop, 1)
+
+## replace 0s with NAs for empty spaces in TeX output
+pred_prop[pred_prop == 0] <- NA
+
+## output proportion table
+print(xtable(pred_prop, caption = 'Summary statistics for continuous predictors. Values of two for sanction and mediation represent multilateral sanctions and mediation by regional organizations, respectively. Comprehensiveness is reverse coded so increasing values represent less comprehensive agreements.',
+             align = c('l', rep('r', 3)), label = 'tab:pred_prop'),
+      table.placement = '!h', sanitize.text.function = identity)
+@
+
+<<desc_plots, fig.cap = 'Distributions of predictors in regression model explaining agreement strength. Continuous predictors are shown centered and standardized', fig.pos = 'h!', fig.align = 'center', out.width = '1\\textwidth', message = F, warning = F>>=
+
+desc_lab <- as_labeller(c('sanction' = 'Sanction',
+                          'mediation' = 'Mediation',
+                          'intervention_imi' = 'Intervention (IMI)',
+                          'intervention_acd' = 'Intervention (ACD)',
+                          'pa_type' = 'Comprehensiveness',
+                          'Inc' = 'Governmental Conflict',
+                          'CumInt' = 'Cumulative Intensity',
+                          'cold_war' = 'Post Cold War',
+                          'aidpct' = 'Aid (%GNI)',
+                          'rpr_work' = 'Relative Political Reach',
+                          'polity2' = 'Polity2'))
+
+## select variables for plotting
+pred_gg_disc <- PA_avg %>% select(sanction, mediation, intervention_imi,
+                                  intervention_imi, intervention_acd, pa_type,
+                                  Inc, CumInt, cold_war) %>% 
+  mutate_at(vars(pa_type, Inc), function(x) as.numeric(x) - 1) %>% 
+  mutate_at(vars(Inc, sanction, mediation), function(x) as.numeric(as.character(x)))
+
+pred_gg_cont <- PA_avg %>% select(aidpct, rpr_work, polity2) %>%
+  mutate_all(scale)
+
+a <- ggplot(melt(pred_gg_disc), aes(x = value)) +
+  geom_bar() +
+  labs(y = '', x = '') + 
+  scale_x_continuous(breaks = c(0, 1, 2)) +
+  facet_wrap(~ variable, labeller = desc_lab, scales = 'free_x') + theme_rw()
+
+b <- ggplot(melt(pred_gg_cont), aes(x = value)) +
+  geom_histogram() +
+  labs(y = '', x = '') + 
+  facet_wrap(~ variable, labeller = desc_lab) + theme_rw()
+
+
+
+gridExtra::grid.arrange(a, b, layout_matrix = rbind(c(1, 1, 1),
+                                                    c(1, 1, 1),
+                                                    c(2, 2, 2)),
+                        left = 'Count', bottom = 'Value')
+@
+
+<<pred_corr, fig.cap = 'Correlation of predictors. Continuous predictors centered and standardized.', out.width = '.75\\linewidth', fig.pos = '!h', fig.align = 'center'>>=
+corrplot(cor(covariates), type = 'lower', cl.length = 9, tl.col = 'black')
+@
+
+Figure \ref{fig:add_irt_scatter} presents a scatterplot between the additive index and full probability model estimates of strength for peace agreements in our sample.
+
+<<add_irt_scatter, fig.cap = 'Scatterplot of latent variable estimate of agreement strength from the full probability model and an additive index of provisions.', fig.height = 3, fig.width = 3, fig.align = 'center', fig.pos = 'h!'>>=
+ggplot(PA_avg, aes(x = add_ind, y = full.mean)) +
+  geom_jitter(color = 'grey40', alpha = .75) +
+  labs(x = 'Additive Index', y = 'Full Probability Estimate') +
+  theme_rw() + theme(aspect.ratio = 1)
+@
+
+\clearpage
+
+\section{Data Cleaning and Recoding Decisions} \label{appendix:coding_decisions}
+
+There are several observations in the Civil War Mediation data that are missing either start or end dates to the mediation episode. The mean duration of mediation events with no missing start or end dates (n = \Sexpr{med_dur$n}) is \Sexpr{med_dur$mean} days. However, the data are \emph{extremely} skewed with a maxmimum mediation duration of \Sexpr{prettyNum(med_dur$tail[1], big.mark = ',')} days, followed by a duration of \Sexpr{prettyNum(med_dur$tail[2], big.mark = ',')} days. As such, we use the median mediation duration of \Sexpr{prettyNum(med_dur$median, big.mark = ',')} days and set missing start dates \Sexpr{prettyNum(med_dur$median, big.mark = ',')} days earlier than their corresponding end dates, and missing end dates \Sexpr{prettyNum(med_dur$median, big.mark = ',')} days later than their corresponding event dates. Median imputation allows us to include more mediation events than listwise deletion otherwise would, and should not significantly bias our results because it reduces variation in a variable used to code a dummy variable. We also potentially over-count mediation as the available data do not allow us to match on conflict, just state.
+
+The International Military Intervention data feature similar missingness of start and end dates. Any observations with neither a start or end date are dropped. Observations missing only one data follow the same procdure as above. The distribution of intervention durations is similarly skewed with maximum duration of \Sexpr{prettyNum(int_dur$tail[1], big.mark = ',')} days, mean of \Sexpr{int_dur$mean}, and median of \Sexpr{int_dur$median}. As with mediation, we set missing start and end dates \Sexpr{int_dur$median} days before or after the observed date.
+
+The date ranges for each of our data sources are listed below. The start of the Peace Agreements Data in 1975 and the end of the TIES and IMI data in 2005 dictate our sample of agreements from 1975-2005.
+
+\begin{itemize}
+  \singlespacing
+  \item UCDP Armed Conflict Data\footnote{We use Version 4-2013 of the ACD for compatibility with the ID system used by the Peace Agreements Data}: 1946-2012
+  \item UCDP Peace Agreements: 1975-2011
+  \item Civil War Mediation: 1946-2011
+  \item Threat and Imposition of Economic Sanctions: 1945-2005
+  \item Relative Political Capacity: 1960-2013
+  \item World Development Indicators: 1960-2017
+  \item Polity: 1800-2015
+  \item International Military Interventions: 1946-2005
+\end{itemize}
+
+\clearpage
+
+\section{Missing Data and Multiple Imputation} \label{appendix:missing_data}
+
+Variables in the analysis dataset with missing values, and the proportion of missingness are presented in Table \ref{tab:missing}. As the standard practice is to only impute variables with fewer than 15\% missing values, we multiply impute missing values for all of these variables, generating \Sexpr{PA_mi$m} imputed datasets.
+
+<<missing, results = 'asis'>>=
+miss_vars <- apply(PA[, c('aidpct', 'rpr_work', 'polity2')], 2, function(x) (sum(is.na(x)) / length(x)) * 100)
+miss_vars <- data.frame(sort(miss_vars, decreasing = T))
+colnames(miss_vars) <- '\\% Missing'
+rownames(miss_vars) <- c('Aid ($\\%$ GNI)', 'RPR', 'Polity2')
+print(xtable(miss_vars, align = rep('l', 2), caption = 'Variables with Missing Values', label = 'tab:missing'),
+      sanitize.text.function = function(x) gsub('_', '', x))
+@
+
+Although it is possible to employ a model that jointly specifies the probability of an observation's absence alongside the parameters of interest, doing so is unnecessary in this case. When the proportion of missing information in a dataset is low, this ``uncongeniality'' between separate imputation and analysis models does not affect inference of imputed data \cite{Meng1994}. The proportion of missing data in our dataset is \Sexpr{sum(PA_mi$nmis) / prod(dim(PA))}, so we are confident in the validity of our inferences after imputing the data separately.
+
+\clearpage
+
+\section*{Varying Anchoring Agreements} \label{appendix:anchors}
+
+The distribution of agreements along this latent scale is relatively invariant to different choices of agreements for the strong and weak identification restriction. In addition to the results from the model above, Figure \ref{fig:id_scatter_labels} presents the distribution of agreement strength for models with three different sets of identification restrictions. The position of the points in Figure \ref{fig:id_scatter_labels} represents how far an agreement has moved in the order compared to the model in Figure \ref{fig:strength_dotplot}. The \emph{x} axis is the order in the main model whose results are presented here, while the \emph{y} axis represents the order in models with three different choices of weak and strong agreements to identify the scale. Points exactly on the diagonal indicate an agreement whose position in the ranking of agreements is identical under both sets of identification restrictions.
+
+An unstable measure would see few points near the diagonal, while a stable one would see many points along the diagonal. Most of the points in Figure \ref{fig:id_scatter_labels} are relatively close to the diagonal. This suggests the latent scale of agreement strength is not sensitive to choice of identification restriction. We present the coefficients for agreement strength predictors from each of these models in the Online Appendix; the magnitude and direction of estimates is stable with regard to choice of identification restriction.
+
+<<id_scatter_labels, message = F, fig.cap = 'Comparison of agreement strength estimates from models with three different sets of end points selected as identification restrictions. Points below the diagonal indicate agreements that are ranked higher in our main model, while those above the diagonal indicate agreements ranked higher under an alternative identification strategy. Agreements which shift more than 10 places in the ranking are labeled.', fig.pos = 'h!', fig.height = 4>>=
+
+## create object with peace agreements and estimated strengths for main model
+agmt_measures_full <- cbind(PA_names, summary(agmt_full_prob,  pars = 'theta',
+                                              probs = c(.5 - ci_level/2,
+                                                        .5 + ci_level/2))$summary[, c(1, 4:5)])
+
+## combine agreement names and dates with estimated strengths
+strength_full <- merge(agmt_measures_full, PA_avg[, c('PAID', 'Year')], sort = F)
+
+## sort from weakest to strongest agreement
+strength_full <- strength_full[order(strength_full$mean), ]
+
+## create index variable to present shift between IRT models
+strength_full$index <- 1:nrow(strength_full)
+
+## rename upper and lower uncertainty bound for intervals
+colnames(strength_full)[7:8] <- c('int_low', 'int_hi')
+
+## convert agreement names to character for removal
+strength_full$pa_name_dot <- as.character(strength_full$pa_name)
+
+## remove all agreement names except for illustrative cases
+strength_full$pa_name_dot[!strength_full$pa_name_dot %in% c('DUP/SPLM Sudan Peace Agreement',
+                                                            'Tripoli Agreement',
+                                                            'The Good Friday Agreement',
+                                                            'Arusha Accords')] <- ''
+
+## create object with peace agreements and estimated strengths
+agmt_measures_id_1 <- cbind(PA_names,
+                           summary(agmt_full_prob_id_1, pars = 'theta',
+                                   probs = c(.5 - ci_level/2,
+                                             .5 + ci_level/2))$summary[, c(1, 4:5)])
+
+## combine agreement names and dates with estimated strengths
+strength_id_1 <- merge(agmt_measures_id_1, PA_avg[, c('PAID', 'Year')], sort = F)
+
+## merge in index variable from full probability model to compare ordering of estiamtes
+strength_id_1 <- merge(strength_id_1, strength_full[, c("pa_name", "index")])
+
+## sort from weakest to strongest agreement
+strength_id_1 <- strength_id_1[order(strength_id_1$mean), ]
+
+## create new index for plotting
+strength_id_1$index_new <- 1:nrow(strength_id_1)
+
+## calculate deviation from initial estimate for plotting
+strength_id_1$dev <- abs(1:nrow(strength_id_1) - strength_id_1$index)
+
+## create object with peace agreements and estimated strengths
+agmt_measures_id_2 <- cbind(PA_names,
+                           summary(agmt_full_prob_id_2, pars = 'theta',
+                                   probs = c(.5 - ci_level/2,
+                                             .5 + ci_level/2))$summary[, c(1, 4:5)])
+
+## combine agreement names and dates with estimated strengths
+strength_id_2 <- merge(agmt_measures_id_2, PA_avg[, c('PAID', 'Year')], sort = F)
+
+## merge in index variable from full probability model to compare ordering of estiamtes
+strength_id_2 <- merge(strength_id_2, strength_full[, c("pa_name", "index")])
+
+## sort from weakest to strongest agreement
+strength_id_2 <- strength_id_2[order(strength_id_2$mean), ]
+
+## create new index for plotting
+strength_id_2$index_new <- 1:nrow(strength_id_2)
+
+## calculate deviation from initial estimate for plotting
+strength_id_2$dev <- abs(1:nrow(strength_id_2) - strength_id_2$index)
+
+## create object with peace agreements and estimated strengths
+agmt_measures_id_3 <- cbind(PA_names,
+                           summary(agmt_full_prob_id_3, pars = 'theta',
+                                   probs = c(.5 - ci_level/2,
+                                             .5 + ci_level/2))$summary[, c(1, 4:5)])
+
+## combine agreement names and dates with estimated strengths
+strength_id_3 <- merge(agmt_measures_id_3, PA_avg[, c('PAID', 'Year')], sort = F)
+
+## merge in index variable from full probability model to compare ordering of estiamtes
+strength_id_3 <- merge(strength_id_3, strength_full[, c("pa_name", "index")])
+
+## sort from weakest to strongest agreement
+strength_id_3 <- strength_id_3[order(strength_id_3$mean), ]
+
+## create new index for plotting
+strength_id_3$index_new <- 1:nrow(strength_id_3)
+
+## calculate deviation from initial estimate for plotting
+strength_id_3$dev <- abs(1:nrow(strength_id_3) - strength_id_3$index)
+
+## collect agreement name and ID no., index in main model, and index in different ID modl
+strength_scatter_gg <- strength_full %>%
+  select(PAID, index) %>%
+  mutate(id = '1') %>%
+  left_join(strength_id_1 %>%
+              select(pa_name, PAID, index_new, dev)) %>%
+  bind_rows(strength_full %>%
+              select(PAID, index) %>%
+              mutate(id = '2') %>%
+              left_join(strength_id_2 %>%
+                          select(pa_name, PAID, index_new, dev))) %>%
+  bind_rows(strength_full %>%
+              select(PAID, index) %>%
+              mutate(id = '3') %>%
+              left_join(strength_id_3 %>%
+                          select(pa_name, PAID, index_new, dev))) %>%
+  mutate(pa_name_all = pa_name, pa_name = ifelse(dev > 10, as.character(pa_name), ''))
+
+## rename
+strength_scatter_gg$pa_name[strength_scatter_gg$pa_name == 'Memorandum of Understanding between the Government of the Republic of Indonesia and the Free Aceh Movement'] <-
+  'Indonesia-Free Aceh Movement MOU'
+
+## relabel facets with strong and weak agreements used for ID restrictions
+id_facet_labels <- as_labeller(c('1' = paste(PA_names$pa_name[c(id_hi_1)],
+                                             PA_names$pa_name[c(id_lo_1)],
+                                             sep = '\n'),
+                                 '2' = paste(PA_names$pa_name[c(id_lo_2)], # switched
+                                             PA_names$pa_name[c(id_hi_2)],
+                                             sep = '\n'),
+                                 '3' = paste(PA_names$pa_name[c(id_hi_3)],
+                                             PA_names$pa_name[c(id_lo_3)],
+                                             sep = '\n')))
+
+## calculate largest deviation for arusha and good friday
+max_dev <- strength_scatter_gg %>%
+  filter(pa_name_all == 'Arusha Accords' |
+           pa_name_all == 'The Good Friday Agreement') %>% 
+  summarize(max(dev))
+
+## plot 
+ggplot(strength_scatter_gg, aes(x = index, y = index_new, label = pa_name)) +
+  geom_abline(slope = 1, intercept = 0, alpha = .75) +
+  geom_point(alpha = .25) +
+  facet_wrap(~ id, labeller = id_facet_labels, ncol = 3) +
+  geom_text_repel(size = 2, point.padding = 1, box.padding = .5,
+                  min.segment.length = 0, force = 5, na.rm = T,
+                  segment.alpha = .5, seed = 8) +
+  labs(x = 'Main model', y = 'Alternative identification') +
+  coord_equal(ratio = 1) +
+  theme_rw() +
+  theme(strip.text.x = element_text(size = 7),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank())
+@
+
+Looking at Figure \ref{fig:id_scatter_labels}, there are relatively few agreements which move more than 10 places in rankings between our main model and ones with alternative identifying agreements. All of the agreements which move more than 10 places in rank are identifying agreements in one of our models. All other agreements do not move more than 10 places in the ranking, and some do not move at all between identification strategies. This pattern suggests that the ranking of the agreements chosen as identification restrictions may vary significantly, but that the ordering of the remainder of agreements will not. Importantly, the Good Friday Agreement and the Arusha Accords do not deviate more than \Sexpr{as.numeric(max_dev)} \Sexpr{ifelse(as.numeric(max_dev) == 1, 'place', 'places')} in rank across any of the models. The results for these oft-studied agreements are stable regardless of identification restriction, meaning that we can measure and study their \emph{strength} directly, regardless of their eventual duration. Consequently, it may be prudent to not select theoretically interesting or especially policy relevant agreements for identification restrictions.
+
+
+\section{Additional Results} \label{appendix:add_results}
+
+<<effect_size_calc>>=
+
+## agreement strength ranges
+strength_bounds <- range(summary(agmt_full_prob, pars = 'theta')$summary[, 'mean'])
+strength_range <- max(summary(agmt_full_prob, pars = 'theta')$summary[, 'mean']) -
+  min(summary(agmt_full_prob, pars = 'theta')$summary[, 'mean'])
+
+## unilateral sanction effect sizes and percent shift along strength range
+eff_sanc <- summary(agmt_full_prob, pars = 'beta',
+                    probs = c(.5 - ci_level/2, .5,
+                              .5 + ci_level/2))$summary['Sanction', c(4:6)]
+eff_sanc_pct <- (eff_sanc / strength_range) * 100
+
+## multilateral sanction effect sizes and percent shift along strength range
+eff_msanc <- summary(agmt_full_prob, pars = 'beta',
+                    probs = c(.5 - ci_level/2, .5,
+                              .5 + ci_level/2))$summary['Multilateral Sanction', c(4:6)]
+eff_msanc_pct <- (eff_msanc / strength_range) * 100
+
+## mediation effect sizes and percent shift along strength range
+eff_med <- summary(agmt_full_prob, pars = 'beta',
+                    probs = c(.5 - ci_level/2, .5,
+                              .5 + ci_level/2))$summary['Mediation', c(4:6)]
+eff_med_pct <- (eff_med / strength_range) * 100
+
+## regional mediation effect sizes and percent shift along strength range
+eff_rmed <- summary(agmt_full_prob, pars = 'beta',
+                    probs = c(.5 - ci_level/2, .5,
+                              .5 + ci_level/2))$summary['Regional Mediation', c(4:6)]
+eff_rmed_pct <- (eff_rmed / strength_range) * 100
+
+## intervention effect sizes and percent shift along strength range
+eff_mil <- summary(agmt_full_prob, pars = 'beta',
+                    probs = c(.5 - ci_level/2, .5,
+                              .5 + ci_level/2))$summary['Intervention', c(4:6)]
+eff_mil_pct <- (eff_mil / strength_range) * 100
+
+## international dependence percent shift along strength range; one unit change
+eff_aid <- summary(agmt_full_prob, pars = 'beta',
+                    probs = c(.5 - ci_level/2, .5,
+                              .5 + ci_level/2))$summary['Aid ($\\%$ GNI)', c(4:6)]
+eff_aid_pct <- eff_aid / strength_range * 100
+
+## create dataframe for plotting
+effect_sizes <- data.frame(rbind(eff_sanc_pct, eff_msanc_pct, eff_med_pct,
+                                eff_rmed_pct, eff_mil_pct, eff_aid_pct))
+colnames(effect_sizes) <- c('min', 'med', 'max')
+effect_sizes$variable <- factor(c('Sanction', 'Multilateral Sanction', 'Mediation',
+                           'Regional Mediation', 'Intervention', 'Aid (% GNI)'),
+                           levels = rev(c('Sanction', 'Multilateral Sanction', 'Mediation',
+                           'Regional Mediation', 'Intervention', 'Aid (% GNI)')))
+@
+
+<<effect_sizes, fig.height = 2, fig.width = 6, fig.align = 'center', fig.cap = "Estimates of the marginal effect of a one unit shift in predictors on agreement strength, with 95\\% credible intervals. A 5\\% change in agreement strength means that a dummy variable's presence moves the estimate 5\\% up the range of agreement strength, or that a one unit change in a continuous variable's value moves the estimate the same distance.">>=
+
+## plot effect ranges
+ggplot(effect_sizes, aes(x = variable, y = med, ymin = min, ymax = max)) +
+  geom_pointrange() +
+  geom_hline(yintercept = 0, lty = 5, col = 'gray40') +
+  coord_flip() +
+  labs(x = '', y = '% change in agreement strength') +
+  theme_rw() +
+  theme(axis.ticks.y = element_blank(),
+        axis.ticks.x = element_line(color = 'gray40'))
+@
+
+The units of scale for agreement strength are not inherently meaningful because they are the result of a latent variable estimation. Accordingly, they should be thought of relative to the total extent of agreement strength values. Interpreting the relationship between peace agreement strength and both types of sanctions and mediation along with military intervention is relatively straightforward because they are dummy or factor variables, so their marginal effect is just the result of their presence or absence relative to the excluded category. The effect of aid is less straightforward, but relatively simple, because it is standardized to have mean 0 and unit variance. Figure \ref{fig:effect_sizes} presents the median effect of a one unit shift in our predictors on an agreement's position within the range of agreement strength estimates. The median effect of an agreement being signed under the duress of economic sanctions is \Sexpr{eff_sanc[2]}, which shifts an agreement's strength \Sexpr{abs(eff_sanc_pct[2])}\% downward in the distribution of agreement strengths, which is not as far down as the \Sexpr{eff_msanc[2]} median effect of multilateral sanctions which shifts agreements  \Sexpr{abs(eff_msanc_pct[2])}\% downward. Foreign aid, the only predictor with more than \Sexpr{ci_level * 100}\% of its posterior distribution on the same side of zero, produces a change of \Sexpr{eff_aid[2]} for each one unit shift in scaled aid, which translates to a \Sexpr{eff_aid_pct[2]}\% shift upward in the distribution of agreement strengths.
+
+
+\clearpage
+
+\section{Full Probability Model vs.\ Standalone IRT} \label{appendix:full_vs_irt}
+
+To demonstrate that our results are not an artifact of model specification choices, we present a comparison of our results along with those taken from a model which estimates the latent agreement strength and the effect of our explanatory variables on agreement strength separately. We also present a model which uses only one of our explanatory variables -- sanctions -- and show that the results of this bivariate model are similar to those of our full model.
+
+Figures \ref{fig:strength_dotplots} presents the distribution of estimated agreement strengths, and their uncertainties, from the full probability model and the standalone IRT model. The estimates without any associated uncertainty are the two fixed agreements used to identify and scale our model. The full probability model estimates are taken from the model that incorporates all explanatory predictors. Since there is no missingness in the observed indicators, we do not need to perform any imputation and run \Sexpr{length(agmt_irt@stan_args)} chains for our standalone IRT model.
+
+The colors of the points range from darkest to lighest representing their position within the spectrum of agreement strengths in the full probability model. Thus, a point whose color is out of step with its neighbors' in the lower plot represents an agreement whose place in the ranking shifts significantly between the two models. While there are some points in the middle of the lower which have shifted position from the full probability model, those at the extremes remain relatively consistent, telling us that their are not fundamental differences between the two estimated scales. These minor differences can be explained by the fact that the full probability model includes more information than the standalone IRT model.
+
+Differences in ordering between the two estimates represent increased accuracy in the full probability model due to the extra information it is able to incorporate. This is especially true at the bottom end of the scale where several agreements have identical strengths in the standalone IRT mode. The higher level of information in the full probability model introduces more variation into the estimates, allowing for better inference.
+
+<<strength_dotplots, echo = F, warning = F, fig.cap = 'Latent Agreement Strengths', fig.subcap = c('Full Probability Model', 'Standalone IRT Model'), fig.height = 4>>=
+
+## create object with peace agreements and estimated strengths
+agmt_measures_full <- cbind(PA_names, summary(agmt_full_prob,  pars = 'theta',
+                                              probs = c(.5 - ci_level/2,
+                                                        .5 + ci_level/2))$summary[, c(1, 4:5)])
+## plot
+dotplot_full <- ggplot(strength_full, aes(x = mean, y = seq(1, length(strength_full$mean)))) +
+  geom_segment(aes(x = int_low, xend = int_hi, y = seq(1, length(strength_full$mean)),
+                   yend = seq(1, length(strength_full$mean))), col = 'dodgerblue', alpha = .65,
+               data = strength_full) +
+  geom_point(alpha = .75, col = 'dodgerblue') +
+  scale_color_continuous('midnightblue', 'skyblue') +
+  scale_x_continuous(breaks = seq(-20, 20, 4)) +
+  geom_vline(xintercept = 0, linetype = 5, col = 'lavenderblush4') +
+  theme_bw() +
+  theme(plot.background = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.border = element_blank(),
+        axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_line(color = 'lavenderblush4'))
+
+## create object with peace agreements and estimated strengths
+agmt_measures_irt <- cbind(PA_names,
+                           summary(agmt_irt, pars = 'theta',
+                                   probs = c(.5 - ci_level/2,
+                                             .5 + ci_level/2))$summary[, c(1, 4:5)])
+
+## combine agreement names and dates with estimated strengths
+strength_irt <- merge(agmt_measures_irt, PA_avg[, c('PAID', 'pa_name',
+                                                    'Year')], sort = F)
+
+## merge in index variable from full probability model to compare ordering of estiamtes
+strength_irt <- merge(strength_irt, strength_full[, c("pa_name", "index")])
+
+## sort from weakest to strongest agreement
+strength_irt <- strength_irt[order(strength_irt$mean), ]
+
+## calculate deviation from full probability model estimate for plotting
+strength_irt$dev <- abs(1:nrow(strength_irt) - strength_irt$index)
+
+## create new index for plotting
+strength_irt$index_new <- 1:nrow(strength_irt)
+
+## rename upper and lower uncertainty bound for intervals
+colnames(strength_irt)[7:8] <- c('int_low', 'int_hi')
+
+## plot
+dotplot_irt <- ggplot(strength_irt, aes(x = mean, y = seq(1, length(strength_irt$mean)))) +
+  geom_segment(aes(x = int_low, xend = int_hi, y = seq(1, length(strength_irt$mean)),
+                   yend = seq(1, length(strength_irt$mean))), col = 'dodgerblue', alpha = .65,
+               data = strength_irt) +
+  geom_point(alpha = .75, col = 'dodgerblue') +
+  scale_color_continuous('midnightblue', 'skyblue') +
+  scale_x_continuous(breaks = seq(-8, 8, 2)) +
+  geom_vline(xintercept = 0, linetype = 5, col = 'lavenderblush4') +
+  theme_bw() +
+  theme(plot.background = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.border = element_blank(),
+        axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_line(color = 'lavenderblush4'))
+
+## plot dotplots
+gridExtra::grid.arrange(dotplot_full, dotplot_irt, ncol = 2)
+@
+
+<<standalone_full_scatter, fig.cap = 'Comparison of agreement strength estimates from the full probability and standalone IRT models. Points below the diagonal indicate agreements that are ranked higher in the former, while those above the diagonal indicate agreements ranked higher in the latter. Agreements which shift more than 10 places in the ranking are labelled.', fig.height = 4, fig.width = 4, fig.pos = 'h', fig.align = 'center', message = F, warning = F>>=
+
+## code agreemeents by deviation for color plotting
+strength_irt <- strength_irt %>%
+  mutate(dev_col = as.factor(ifelse(dev > 10, 1, 0)))
+
+## plot
+ggplot(strength_irt, aes(x = index, y = index_new, color = dev_col)) +
+  geom_abline(slope = 1, intercept = 0) +
+  geom_point(alpha = .75) +
+  coord_equal(ratio = 1) +
+  labs(x = 'Full Probability', y = 'Standalone IRT') +
+  scale_color_discrete(name = 'Deviation', labels = c('< 10', '> 10')) +
+  theme_rw() +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank())
+@
+
+Figure \ref{fig:standalone_full_scatter} presents a scatter plot of relative agreement strengths between the full probability model and the standalone IRT model. In contrast with the comparison of different identification strategies under the full probability model in the paper, many agreements move more than 10 positions in the rankings. While the overall distribution of agreement strengths is relatively similar, as seen in Figure \ref{fig:standalone_full_scatter}, the position of agreements within those distributions varies significantly, with \Sexpr{sum(as.numeric(as.character(strength_irt$dev_col)))} moving more than 10 places in ranking.
+
+We first present a series of scatter plots from our main model. Figure \ref{fig:scatter} shows the distibution of (jittered) agreement strengths relative to our explanatory variables, along with best fit lines. Although the comprehensiveness of a peace agreement is a control variable, we briefly discuss results for it as a way to verify that our latent scale is correctly estimated.
+
+<<scatter, fig.cap = 'Scatter plots of (jittered) agreement strength and explanatory variables.', fig.height = 2, fig.pos = '!h', fig.align = 'center'>>=
+
+## sanction scatterplot
+scat_sanc <- ggplot(PA_avg, aes(x = as.numeric(sanction), y = full.mean)) +
+  geom_smooth(color = 'gray80', method = 'lm', se = F) +
+  geom_jitter(width = .02, height = .07, alpha = .5, color = 'gray20') +
+  scale_x_continuous(breaks = c(0, 1, 2), labels = c('no', 'unilateral', 'multilateral')) +
+  labs(x = 'Sanction', y = 'Agreement Strength') +
+  theme_bw() +
+  theme(plot.background = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.border = element_blank(),
+        axis.title.x = element_text(size = 7),
+        axis.text.x = element_text(size = 7),
+        axis.ticks.x = element_blank())
+
+## mediation scatterplot
+scat_med <- ggplot(PA_avg, aes(x = as.numeric(mediation), y = full.mean)) +
+  geom_smooth(color = 'gray80', method = 'lm', se = F) +
+  geom_jitter(width = .02, height = .07, alpha = .5, color = 'gray20') +
+  scale_x_continuous(breaks = c(0, 1, 2), labels = c('no', 'yes', 'regional')) +
+  labs(x = 'Mediation', y = '') +
+  theme_bw() +
+  theme(plot.background = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.border = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.title.x = element_text(size = 7),
+        axis.text.x = element_text(size = 7),
+        axis.ticks.x = element_blank())
+
+## intervention scatterplot
+scat_mil <- ggplot(PA_avg, aes(x = intervention_imi, y = full.mean)) +
+  geom_smooth(color = 'gray80', method = 'lm', se = F) +
+  geom_jitter(width = .02, height = .07, alpha = .5, color = 'gray20') +
+  scale_x_continuous(breaks = c(0, 1), labels = c('no', 'yes')) +
+  labs(x = 'Intervention (IMI)', y = '') +
+  theme_bw() +
+  theme(plot.background = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.border = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.title.x = element_text(size = 7),
+        axis.text.x = element_text(size = 7),
+        axis.ticks.x = element_blank())
+
+## aid scatterplot
+scat_aid <- ggplot(PA_avg, aes(x = aidpct, y = full.mean)) +
+  geom_smooth(color = 'gray80', method = 'lm', se = F) +
+  geom_jitter(width = .02, height = .07, alpha = .5, color = 'gray20') +
+  labs(x = 'Aid (%GNI)', y = '') +
+  theme_bw() +
+  theme(plot.background = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.border = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.title.x = element_text(size = 7),
+        axis.text.x = element_text(size = 7),
+        axis.ticks.x = element_blank())
+
+## agreement comprehensiveness scatterplot
+scat_type <- ggplot(PA_avg, aes(x = pa_type, y = full.mean)) +
+  geom_smooth(color = 'gray80', method = 'lm', se = F) +
+  geom_jitter(width = .02, height = .07, alpha = .5, color = 'gray20') +
+  scale_x_continuous(breaks = c(1, 2, 3), label = c('full', 'partial', 'process')) +
+  labs(x = 'Comprehensiveness', y = '') +
+  theme_bw() +
+  theme(plot.background = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.border = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.title.x = element_text(size = 7),
+        axis.text.x = element_text(size = 7),
+        axis.ticks.x = element_blank())
+
+## arrange all five plots in two rows with bottom two centered
+gridExtra::grid.arrange(scat_sanc, scat_med, scat_mil, scat_aid, ncol = 4)
+@
+
+Figure \ref{fig:scatter_irt} presents the distibution of (jittered) agreement strengths from the standalone IRT model relative to our explanatory variables, along with best fit lines. Although the estimated agreement strengths are different from those produced by the full probability model in Figure \ref{fig:scatter}, the relationships between them and our explanatory variables are substantively similar.
+
+<<scatter_irt, fig.cap = 'Bivariate Scatter Plots from Standalone IRT Model', fig.height = 2, fig.align = 'center', fig.pos = '!h'>>=
+
+## sanction scatterplot
+scat_sanc_irt <- ggplot(PA_avg, aes(x = as.numeric(sanction), y = irt.mean)) +
+  geom_smooth(color = 'gray80', method = 'lm', se = F) +
+  geom_jitter(width = .02, height = .07, alpha = .5, color = 'gray20') +
+  scale_x_continuous(breaks = c(0, 1, 2), labels = c('no', 'unilateral', 'multilateral')) +
+  labs(x = 'Sanction', y = 'Agreement Strength') +
+  theme_bw() +
+  theme(plot.background = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.border = element_blank(),
+        axis.title.x = element_text(size = 7),
+        axis.text.x = element_text(size = 7),
+        axis.ticks.x = element_blank())
+
+## mediation scatterplot
+scat_med_irt <- ggplot(PA_avg, aes(x = as.numeric(mediation), y = irt.mean)) +
+  geom_smooth(color = 'gray80', method = 'lm', se = F) +
+  geom_jitter(width = .02, height = .07, alpha = .5, color = 'gray20') +
+  scale_x_continuous(breaks = c(0, 1, 2), labels = c('no', 'yes', 'regional')) +
+  labs(x = 'Mediation', y = '') +
+  theme_bw() +
+  theme(plot.background = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.border = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.title.x = element_text(size = 7),
+        axis.text.x = element_text(size = 7),
+        axis.ticks.x = element_blank())
+
+## intervention scatterplot
+scat_mil_irt <- ggplot(PA_avg, aes(x = intervention_imi, y = irt.mean)) +
+  geom_smooth(color = 'gray80', method = 'lm', se = F) +
+  geom_jitter(width = .02, height = .07, alpha = .5, color = 'gray20') +
+  scale_x_continuous(breaks = c(0, 1), labels = c('no', 'yes')) +
+  labs(x = 'Intervention', y = '') +
+  theme_bw() +
+  theme(plot.background = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.border = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.title.x = element_text(size = 7),
+        axis.text.x = element_text(size = 7),
+        axis.ticks.x = element_blank())
+
+## aid scatterplot
+scat_aid_irt <- ggplot(PA_avg, aes(x = aidpct, y = irt.mean)) +
+  geom_smooth(color = 'gray80', method = 'lm', se = F) +
+  geom_jitter(width = .02, height = .07, alpha = .5, color = 'gray20') +
+  labs(x = 'Aid (%GNI)', y = '') +
+  theme_bw() +
+  theme(plot.background = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.border = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.title.x = element_text(size = 7),
+        axis.text.x = element_text(size = 7),
+        axis.ticks.x = element_blank())
+
+## arrange all five plots in two rows with bottom two centered
+gridExtra::grid.arrange(scat_sanc_irt, scat_med_irt, scat_mil_irt,
+                        scat_aid_irt, ncol = 4)
+@
+
+Table \ref{tab:beta_comp} presents the estimates of the effect of the explanatory variables on agreement strength in the full probability model, with and without the other explanatory predictors, and in the separate IRT and linear model, also with and without the other explanatory predictors. Including all predictors in both the full probability and standalone IRT models shifts the posterior mean slightly upward, but in both cases, the majority of the posterior distribution is still less than zero. This suggests that the negative effect of sanctions on agreement strength persists even when controlling for potentially confounding sources of variation.
+
+<<table_full_alone, results = 'asis'>>=
+mcmcreg(list(agmt_response_nc, agmt_response, agmt_full_prob_nc, agmt_full_prob),
+        pars = c('beta', 'mu_delta'), #reorder_coef = c(1:5, 7:11, 6), REDO w/ mediation
+        ci = ci_level,
+        model_names = c('Standalone IRT', 'Standalone IRT',
+                        'Full Probability', 'Full Probability'),
+        caption = 'Full Probability Model and Standalone IRT', label = 'tab:beta_comp')
+@
+
+Figures \ref{fig:gamma_checks_both1} and \ref{fig:gamma_checks_both2} present the distributions of the discrimination parameters for the full probability model, and the standalone IRT model, respectively. There is more distance between the distributions and zero in the standalone IRT model, but the distributions are much wider, indicating greater uncertainty about the parameters. There is also less overlap between the chains, which means that the sampler has had more difficulty converging to the stationary distribution. The extra information included in the full probability model yields less uncertain estimates and results in more efficient sampling from the posterior.
+
+<<gamma_checks_both, fig.cap = 'Discrimination Parameters', fig.subcap = c('Full Probability Model', 'Standalone IRT'), out.width = '.49\\linewidth', message = F>>=
+
+## plot discrimination parameters from full probability model
+gamma_full_ggs <- ggmcmc::ggs(As.mcmc.list(agmt_full_prob), family = 'gamma')
+gamma_full_ggs$Parameter <- factor(gamma_full_ggs$Parameter,
+                                   levels = rev(levels(gamma_full_ggs$Parameter)))
+ggplot(gamma_full_ggs, aes(x = value, y = (Parameter), color = as.factor(Chain))) +
+  geom_density_ridges(fill = NA, rel_min_height = .05, scale = 2,
+                      show.legend = F, from = 0) +
+  geom_vline(xintercept = 0, linetype = 5, col = 'lavenderblush4') +
+  labs(x = '', y = '') +
+  scale_y_discrete(labels = rev(colnames(indicators.mat))) +
+  theme_bw() + 
+  coord_cartesian(xlim = c(0, 1)) +
+  theme(plot.background = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.border = element_blank(),
+        axis.ticks.x = element_line(color = 'lavenderblush4'),
+        axis.ticks.y = element_blank())
+
+## plot discrimination parameters from standalone IRT model
+gamma_irt_ggs <- ggmcmc::ggs(As.mcmc.list(agmt_irt), family = 'gamma')
+gamma_irt_ggs$Parameter <- factor(gamma_irt_ggs$Parameter,
+                                  levels = rev(levels(gamma_irt_ggs$Parameter)))
+ggplot(gamma_irt_ggs, aes(x = value, y = (Parameter), color = as.factor(Chain))) +
+  geom_density_ridges(fill = NA, rel_min_height = .05, scale = 2,
+                      show.legend = F, from = 0) +
+  geom_vline(xintercept = 0, linetype = 5, col = 'lavenderblush4') +
+  labs(x = '', y = '') +
+  scale_y_discrete(labels = rev(colnames(indicators.mat))) +
+  theme_bw() + 
+  coord_cartesian(xlim = c(0, 2.75)) +
+  theme(plot.background = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.border = element_blank(),
+        axis.ticks.x = element_line(color = 'lavenderblush4'),
+        axis.ticks.y = element_blank())
+@
+
+\clearpage
+
+\section{Robustness Checks} \label{appendix:robustness}
+
+<<irt_params_tab_print, results = 'asis'>>=
+
+# get posterior means of IRT parameters; for in-text references now, print in appendix
+irt_params <- data.frame(summary(agmt_full_prob, pars = 'alpha')$summary[, 'mean'], 
+                         summary(agmt_full_prob, pars = 'gamma')$summary[, 'mean'])
+
+## rename columns alpha and gamma
+colnames(irt_params) <- c('$\\alpha$', '$\\gamma$')
+rownames(irt_params) <- colnames(indicators.mat)
+
+# create latex output of table
+print(xtable(irt_params, caption = "Difficulty ($\\alpha$) and discrimination ($\\gamma$) parameters in the measurement model. The difficulty parameter controls the location of the item characteristic curve's inflection point, while the discrimination parameter controls the slope.",
+             label = 'tab:irt_params', align = 'lll'),
+      sanitize.text.function = function(x) gsub('_', '\\\\_', x))
+@
+
+Table \ref{tab:irt_params} presents the estimated difficulty and discrimination parameters, which are presented graphically in the paper, in numeric form.
+
+<<table_hpdi, results = 'asis'>>=
+
+## create TeX table for HPDI model
+mcmcreg(agmt_full_prob, pars = c('beta', 'mu_delta'), hpdi = T,
+        model_names = 'Full Probability Model', ci = ci_level,
+        caption = 'Posterior Density of Conflict Level Predictors',
+        reorder_coef = c(1:5, 9, 6:8, 10:12),
+        label = 'tab:hpdi')
+@
+
+Table \ref{tab:hpdi} presents the results from Model 6 in the paper with \Sexpr{ci_level * 100}\% highest posterior density intervals (HPDI) instead of credible intervals. Using HPDI instead of equal tailed credible intervals accounts for asymmetric posterior distributions and presents an interval that captures the highest \Sexpr{ci_level * 100}\% posterior density. The interval bounds are similar to the credible intervals presented in the paper, but the \Sexpr{ci_level * 100}\% HPDI interval for foreign aid now contains zero, suggesting that there is greater uncertainty about its effect.
+
+<<table_robust, results = 'asis'>>=
+mcmcreg(list(agmt_full_prob, agmt_full_prob_comp, agmt_full_prob_npk),
+        pars = c('beta', 'mu_delta'), reorder_coef = c(1:5, 9, 6:8, 10:11, 13, 14, 12),
+        model_names = c('Main Model', 'Comprehensiveness', 'No Peacekeeping'),
+        label = 'tab:comp_npk')
+@
+
+The \texttt{pa\_type} variable in the peace agreements data list whether an agreement is a process, partial, or full agreement. The codebook \cite{Harbom2006} describes each type of agreement as follows:
+\begin{itemize}
+\item A full agreement is an agreement where one or more dyad agrees to settle the whole in- compatibility.
+\item A partial peace agreement is an agreement where one or more dyad agrees to settle a part of the incompatibility.
+\item A peace process agreement is an agreement where one or more dyad agrees to initiate a process that aims to settle the incompatibility.
+\end{itemize}
+
+Table \ref{tab:comp_npk} presents results from models that include agreement comprehensiveness as an explanatory variable and that exclude the peacekeeping as a provision. Process agreements are weaker than partial ones, which are weaker from comprehensive ones. This relationship suggests that our latent scale is oriented correctly, but also raises endogeneity concerns. If comprehensiveness is also a measure of agreement strength, then including it as an explanatory variable could bias our estimates. For this reason, we exclude it from the models in the paper. Implementation denotes whether an ``agreement provided for the  establishment of a commission or committee to oversee implementation of the agreement'' and peacekeeping indicates whether an ``agreement provided for the deployment of a peace-keeping operation'' \cite{Harbom2006}. Neither reflects whether an agreement was actually implemented or if peacekeeping actually occurred, so they do not introduce post-treatment bias. However, peacekeeping could indicate a level of third-party interest in the conflict, raising concerns that international factors are used both to measure and explain agreement strength. As the final model in Table \ref{tab:comp_npk} shows, omitting peacekeeping as an indicator does not substantively change any parameter estimates for our explanatory variables.
+
+<<table_intervention, results = 'asis'>>=
+mcmcreg(list(agmt_full_prob_nc, agmt_full_prob_nc_acd, agmt_full_prob, agmt_full_prob_acd),
+        model_names = c('IMI', 'ACD', 'IMI', 'ACD'), pars = c('beta', 'mu_delta'),
+        caption = '', label = 'tab:intervention')#, reorder_coef = c(1:5, 7:11, 6))
+@
+
+Table \ref{tab:intervention} presents results using the the ACD \texttt{type} variable which discriminates between internal armed conflict and \emph{internationalized} internal armed conflict which denotes external military intervention into a conflict in a given year. The estimates for intervention have opposite signs depending on which measure is used, but estimates for all other predictors are unaffected. The correlation between the intervention variables is \Sexpr{cor(PA_avg$intervention_imi, PA_avg$intervention_acd)}, which reflects the fact that the ACD internationalized conflict variable is a much less nuanced measure of military intervention.
+
+<<id_table, results = 'asis'>>=
+## create TeX table for different identification restrictions
+mcmcreg(list(agmt_full_prob, agmt_full_prob_id_1, agmt_full_prob_id_2,
+             agmt_full_prob_id_3), pars = c('beta', 'mu_delta'), ci = ci_level,
+        caption = "Posterior density of coefficient estimates for full probability model estimated with four different identification restrictions. Model 1 is the main model using the DUP/SPLM Sudan Peace Agreement and Tripoli Agreement as low and high strength end points, respectively. Model 2 uses the New York Agreement and Lom\\'e Peace Agreement, Model 3 uses Accra III and The Lusaka Protocol, while Model 4 uses The Oslo Accord and the Dayton Accord. The sign of each of our variables of interest are consistent, and their magnitudes are substantively similar. Using the zero exclusion criterion to assign significance, a few variables gain or lose significance depending on the end points used.",
+        #reorder_coef = c(1:4, 8, 5:7, 9:11),
+        label = 'table:id')
+@
+
+Table \ref{table:id} presents coefficient estimates for the explanations of agreement strength for our main model (Model 1) and the three differently identified models presented in the paper (Models 2-4). While a few predictors gain or lose significance, the magnitude and direction of estimates is stable across specifications. This robustness provides further evidence that our findings are not an artifact of our choice of which agreements we use as identification restrictions.
+
+\clearpage
+
+\section{Convergence Diagnostics} \label{appendix:convergence}
+
+<<rhat_calc>>=
+
+## replace w/ bayesplot rhat histogram after re-running models to fix names
+options(digits = 3)
+Rhat <- data.frame(Rhat = na.omit(summary(agmt_full_prob)$summary[, 'Rhat']))
+options(digits = 2)
+
+rhat_prop <- sum(na.omit(summary(agmt_full_prob)$summary[, 'Rhat']) <= 1.1) /
+  length (na.omit(summary(agmt_full_prob)$summary[, 'Rhat']))
+
+if (rhat_prop == 1) rhat_prop <- 'all'
+if (rhat_prop < 1) rhat_prop <- paste(rhat_prop * 100, '\\%')
+@
+
+Figure \ref{fig:rhat_hist} presents the distribution of all $\hat{R}$ statistics in the full probability model. Values below 1.1 are generally considered `good' \cite{Gelman1992}, and \Sexpr{rhat_prop} of our $\hat{R}$ statistics are $\leq 1.1$, so we have further evidence indicating good exploration of the parameter space.
+
+<<rhat_hist, fig.height = 4, fig.cap = 'Histogram of $\\hat{R}$ Statistics in Full Probability Model', fig.pos = 'h'>>=
+
+## replace w/ bayesplot rhat histogram after re-running models to fix names
+options(digits = 3)
+ggplot(data = Rhat, aes(x = Rhat)) + geom_histogram(bins = 50, linetype = 0, fill = 'dodgerblue', alpha = .65) +
+  theme_bw() +
+  guides(fill = guide_legend(title = '')) +
+  theme(legend.position = 'right',
+        plot.background = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.border = element_blank(),
+        axis.title.x = element_blank())
+options(digits = 2)
+@
+
+<<hw_test, results = 'asis'>>=
+agmt_mcmc <- As.mcmc.list(agmt_full_prob, pars = 'lp__', include = F)
+hw <- coda::heidel.diag(agmt_mcmc)
+hw <- lapply(hw, na.omit)
+
+hw_tab <- data.frame(pass = sapply(hw, function(x) mean(x[, 1])),
+                     iter = sapply(hw, function(x) mean(x[, 2])),
+                     pval = sapply(hw, function(x) mean(x[, 3])))
+names(hw_tab) <- c('prop. Passed', 'Starting Iteration', 'p-value')
+xtable(hw_tab, caption = '', label = 'tab:hw')
+@
+
+Table \ref{tab:hw} presents the results of the Heidelberger-Welch diagnostic run on all \Sexpr{length(agmt_full_prob@stan_args)} chains, averaged over all parameters in each chain. The first column presents the proportion of parameters in each chain that passes the stationarity test. The second column presents the average starting interation in each chain used to perform the stationarity test. Values close to 1 indicate that we have evidence that earlier samples for that chain are from the stationary distribution. The third column presents the average p-value for the stationarity test. The test assumes the null hypothesis that the samples are from the stationary distribution, so the lowest p-value of \Sexpr{min(hw_tab[,3])} means we fail to reject the null, thus providing us with evidence that all \Sexpr{length(agmt_full_prob@stan_args)} have converged to the stationary distribution.
+
+<<geweke_plot, fig.cap = 'Geweke Diagnostic Test Statistics', fig.align = 'center', fig.height = 5>>=
+beta_ggs <- ggmcmc::ggs(As.mcmc.list(agmt_full_prob), family = 'beta')
+
+## try to reorder based on parameters, still not working
+beta_ggs$Parameter <- factor(beta_ggs$Parameter, levels = rev(levels(beta_ggs$Parameter)))
+
+ggmcmc::ggs_geweke(beta_ggs) +
+  labs(y = '') +
+  guides(fill = guide_legend(title = '')) +
+  scale_y_discrete(labels = rev(colnames(covariates))) +
+  theme(plot.title = element_blank(),
+        axis.title.x = element_blank(),
+        legend.position = 'right') +
+  theme_rw()
+@
+
+Figure \ref{fig:geweke_plot} shows the Z-scores from the Geweke Diagnostic which compares the means in two different fractions of each chain \cite{Geweke1992}. We follow standard practice and compare the first 10\% of each chain with the final 50\%. The diagnostic tests the null hypothesis that both fractions are drawn from the stationary distribution, and we can see from the plot that we fail to reject this hypothesis because almost all Z-scores are within two standard deviations from the mean.
+
+<<gamma_trace, fig.cap = 'Traceplot for measurement model discrimination parameters in the full probability model. The overlap indicates good mixing between chains.', out.height = '.85\\textheight', fig.width = 12, fig.height = 12, message = F, dev = 'png', dpi = 148>>=
+mcmc_trace(as.array(agmt_full_prob), pars = colnames(indicators.mat)) +
+scale_x_continuous(breaks = seq(0, agmt_full_prob@stan_args[[1]]$iter -
+                                  agmt_full_prob@stan_args[[1]]$warmup,
+                                length.out = 3))
+@
+
+Figures \ref{fig:beta_trace} and \ref{fig:gamma_trace} present traceplots for the measurement model parameters and regression model coefficients in the full probability model. Figure \ref{fig:full_ac} presents the within-chain autocorrelation plots for the measurement model parameters and regression model coefficients in the full probability model, averaged across all \Sexpr{length(agmt_full_prob@stan_args)} chains.
+
+<<beta_trace, fig.cap = 'Traceplot for regression model coefficients in the full probability model. The overlap indicates good mixing between chains.', out.height = '.85\\textheight', fig.width = 9, fig.height = 9, message = F, dev = 'png', dpi = 148>>=
+mcmc_trace(as.array(agmt_full_prob), pars = colnames(covariates)) +
+scale_x_continuous(breaks = seq(0, agmt_full_prob@stan_args[[1]]$iter -
+                                  agmt_full_prob@stan_args[[1]]$warmup,
+                                length.out = 3))
+@
+
+<<full_ac, fig.cap = 'Autocorrelation of Full Probability Model', fig.subcap = c('Discrimination Parameters', 'Predictor Coefficients'), out.height = '.45\\textheight', fig.height = 4, message = F>>=
+stan_ac(agmt_full_prob, pars = 'gamma') + scale_y_continuous(breaks = seq(0, 1, .5))
+stan_ac(agmt_full_prob, pars = 'beta') + scale_y_continuous(breaks = seq(0, 1, .5))
+@
+
+Figure \ref{fig:full_ac} presents the histograms of autocorrelation within chains, which measures the inefficiency introduced by first order dependence of the Markov process used in sampling. Autocorrelation falls off significantly faster for predictor coefficients $\beta$ than discrimination parameters $\gamma$. The decreased autocorrelation of sampling $\beta$ improves the overall efficiency of the sampler relative to a standalone IRT model which does not include $\beta$.
+
+\clearpage
+
+\section{Software Versions}
+
+The list below provides version information for the software environment used to generate the results in the paper and SI.
+
+<<versions, results = 'asis'>>=
+toLatex(sessionInfo())
+@
+
+\newpage
+
+\singlespacing
+
+% % bibliography
+\bibliographystyle{apsr}
+\bibliography{Measurement}
+
+\end{document}

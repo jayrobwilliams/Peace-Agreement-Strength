@@ -1,0 +1,18 @@
+ on# R project files
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+
+# knitr acccessory files and pdf output
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
+*.pdf
+*.synctex.gz
+*.tex
+Knitr\ Input/*
+figure/*
+cache/*
