@@ -95,6 +95,9 @@ PA_avg[, c('.imp', '.id')] <- NULL
 PA_names$pa_name <- as.character(PA_names$pa_name)
 PA_names$pa_name[grep('Dayton', PA_names$pa_name)] <- 'Dayton Accords'
 PA_names$pa_name <- as.factor(PA_names$pa_name)
+PA_avg$pa_name <- as.character(PA_avg$pa_name)
+PA_avg$pa_name[grep('Dayton', PA_avg$pa_name)] <- 'Dayton Accords'
+PA_avg$pa_name <- as.factor(PA_avg$pa_name)
 @
 
 % % used to access data and results throughout paper % %
@@ -803,6 +806,9 @@ strength_irt <- merge(agmt_measures_irt, PA_avg[, c('PAID', 'pa_name',
 
 ## merge in index variable from full probability model to compare ordering of estiamtes
 strength_irt <- merge(strength_irt, strength_full[, c("pa_name", "index")])
+
+## drop duplicates due to two agreements called Abuja Peace Agreement
+strength_irt <- strength_irt[!duplicated(strength_irt$PAID),]
 
 ## sort from weakest to strongest agreement
 strength_irt <- strength_irt[order(strength_irt$mean), ]
